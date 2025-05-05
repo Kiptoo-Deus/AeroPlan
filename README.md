@@ -1,4 +1,4 @@
-# ✈️ Flight Planner
+# ✈️ AeroPlan
 
 A C++/Qt-based flight planning application for Microsoft Flight Simulator (MSFS), X-Plane, and Prepar3D. It generates optimal routes using the A\* algorithm, displays real-time maps via MapTiler, and exports flight plans in `.pln`, `.fms`, and `.lnmpln` formats.
 
