@@ -12,5 +12,8 @@ find_package(CURL REQUIRED)
 
 include_directories(${CMAKE_SOURCE_DIR}/include ${CURL_INCLUDE_DIRS})
 
-add_executable(flight-planner src/main.cpp)
+set(SOURCES src/main.cpp)
+set(RESOURCES resources/resources.qrc)
+
+add_executable(flight-planner ${SOURCES} ${RESOURCES})
 target_link_libraries(flight-planner PRIVATE Qt6::Widgets ${CURL_LIBRARIES})

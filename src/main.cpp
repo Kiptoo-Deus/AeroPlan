@@ -1,5 +1,13 @@
 #include <QApplication>
 #include <QMainWindow>
+#include <QWidget>
+#include <QPainter>
+#include <QMouseEvent>
+#include <QResource>
+#include <QDockWidget>
+#include <QComboBox>
+#include <QVBoxLayout>
+#include <QTimer>
 #include <iostream>
 #include <vector>
 #include <string>
@@ -31,8 +39,103 @@ struct Edge {
 struct Weather {
     double wind_speed;
     double wind_dir;
-    Weather() : wind_speed(0.0), wind_dir(0.0) {} // Default constructor
+    Weather() : wind_speed(0.0), wind_dir(0.0) {}
     Weather(double speed, double dir) : wind_speed(speed), wind_dir(dir) {}
+};
+
+class MapWidget : public QWidget {
+private:
+    std::unordered_map<std::string, Waypoint>& waypoints;
+    std::vector<std::string>& route;
+    QImage map_image;
+    double zoom;
+    double offset_x, offset_y;
+    QPointF last_mouse_pos;
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+
+        double map_width = map_image.width() * zoom;
+        double map_height = map_image.height() * zoom;
+        painter.drawImage(QRectF(offset_x, offset_y, map_width, map_height), map_image);
+
+        auto toPixel = [&](double lat, double lon) -> QPointF {
+            double x = (lon + 180.0) / 360.0 * map_image.width();
+            double y = (90.0 - lat) / 180.0 * map_image.height();
+            return QPointF(x * zoom + offset_x, y * zoom + offset_y);
+        };
+
+        for (const auto& [id, wp] : waypoints) {
+            QPointF pixel = toPixel(wp.lat, wp.lon);
+            painter.setPen(Qt::black);
+            painter.setBrush(wp.type == "airport" ? Qt::blue : Qt::red);
+            painter.drawEllipse(pixel, 5, 5);
+            if (zoom > 2.0) { // Show labels only when zoomed in
+                painter.drawText(pixel + QPointF(8, 0), QString::fromStdString(id));
+            }
+        }
+
+        if (!route.empty()) {
+            painter.setPen(QPen(Qt::green, 2));
+            for (size_t i = 1; i < route.size(); ++i) {
+                const Waypoint& wp1 = waypoints.at(route[i-1]);
+                const Waypoint& wp2 = waypoints.at(route[i]);
+                QPointF p1 = toPixel(wp1.lat, wp1.lon);
+                QPointF p2 = toPixel(wp2.lat, wp2.lon);
+                painter.drawLine(p1, p2);
+            }
+        }
+    }
+
+    void wheelEvent(QWheelEvent* event) override {
+        double old_zoom = zoom;
+        zoom *= event->angleDelta().y() > 0 ? 1.1 : 0.9;
+        zoom = std::max(0.5, std::min(zoom, 10.0));
+        double mouse_x = event->position().x();
+        double mouse_y = event->position().y();
+        offset_x += mouse_x * (old_zoom - zoom);
+        offset_y += mouse_y * (old_zoom - zoom);
+        update();
+    }
+
+    void mousePressEvent(QMouseEvent* event) override {
+        if (event->button() == Qt::LeftButton) {
+            last_mouse_pos = event->pos();
+            double x = (event->pos().x() - offset_x) / zoom;
+            double y = (event->pos().y() - offset_y) / zoom;
+            double lon = (x / map_image.width() * 360.0) - 180.0;
+            double lat = 90.0 - (y / map_image.height() * 180.0);
+            for (const auto& [id, wp] : waypoints) {
+                double dist = std::sqrt(std::pow(wp.lat - lat, 2) + std::pow(wp.lon - lon, 2));
+                if (dist < 1.0) {
+                    std::cout << "Clicked waypoint: " << id << "\n";
+                    break;
+                }
+            }
+        }
+    }
+
+    void mouseMoveEvent(QMouseEvent* event) override {
+        if (event->buttons() & Qt::LeftButton) {
+            offset_x += event->pos().x() - last_mouse_pos.x();
+            offset_y += event->pos().y() - last_mouse_pos.y();
+            last_mouse_pos = event->pos();
+            update();
+        }
+    }
+
+public:
+    MapWidget(std::unordered_map<std::string, Waypoint>& wp, std::vector<std::string>& r, QWidget* parent = nullptr)
+        : QWidget(parent), waypoints(wp), route(r), zoom(1.0), offset_x(0), offset_y(0) {
+        setMouseTracking(true);
+        map_image.load(":/world_map.jpg");
+        if (map_image.isNull()) {
+            std::cerr << "Failed to load world_map.jpg\n";
+        }
+        resize(800, 600);
+    }
 };
 
 class FlightPlanner {
@@ -75,7 +178,7 @@ private:
             if (res == CURLE_OK) {
                 try {
                     json j = json::parse(response);
-                    double speed = j["wind"]["speed"].get<double>() * 1.94384; // m/s to knots
+                    double speed = j["wind"]["speed"].get<double>() * 1.94384;
                     double dir = j["wind"]["deg"].get<double>();
                     Weather w(speed, dir);
                     weather_cache.emplace(cache_key, w);
@@ -222,6 +325,17 @@ public:
             std::cout << "Waypoint " << start_id << " not found\n";
         }
     }
+
+    std::unordered_map<std::string, Weather>& getWeatherCache() { return weather_cache; }
+    std::unordered_map<std::string, Waypoint>& getWaypoints() { return waypoints; }
+    std::vector<std::string> getWaypointIds() const {
+        std::vector<std::string> ids;
+        for (const auto& [id, _] : waypoints) {
+            ids.push_back(id);
+        }
+        std::sort(ids.begin(), ids.end());
+        return ids;
+    }
 };
 
 int main(int argc, char *argv[]) {
@@ -233,8 +347,8 @@ int main(int argc, char *argv[]) {
     planner.loadData("data/airports.csv", "data/navaids.csv");
     planner.printGraph("KJFK");
 
-    auto route = planner.findOptimalRoute("KJFK", "KLAX");
-    std::cout << "\nOptimal Route:\n";
+    std::vector<std::string> route = planner.findOptimalRoute("EGLL", "KJFK");
+    std::cout << "\nOptimal Route (EGLL to KJFK):\n";
     if (!route.empty()) {
         for (const auto& wp : route) {
             std::cout << wp << " -> ";
@@ -246,6 +360,78 @@ int main(int argc, char *argv[]) {
 
     QMainWindow window;
     window.setWindowTitle("Flight Planner");
+
+    MapWidget* map = new MapWidget(planner.getWaypoints(), route, &window);
+    window.setCentralWidget(map);
+
+    QDockWidget* dock = new QDockWidget("Route Planner", &window);
+    window.addDockWidget(Qt::LeftDockWidgetArea, dock);
+    QWidget* dockWidget = new QWidget(dock);
+    QVBoxLayout* layout = new QVBoxLayout(dockWidget);
+    QComboBox* startCombo = new QComboBox(dockWidget);
+    QComboBox* endCombo = new QComboBox(dockWidget);
+    layout->addWidget(startCombo);
+    layout->addWidget(endCombo);
+    dock->setWidget(dockWidget);
+
+    for (const auto& id : planner.getWaypointIds()) {
+        startCombo->addItem(QString::fromStdString(id));
+        endCombo->addItem(QString::fromStdString(id));
+    }
+    startCombo->setCurrentText("EGLL");
+    endCombo->setCurrentText("KJFK");
+
+    QTimer* weatherTimer = new QTimer(&window);
+    QObject::connect(weatherTimer, &QTimer::timeout, [&]() {
+        planner.getWeatherCache().clear();
+        std::string start = startCombo->currentText().toStdString();
+        std::string end = endCombo->currentText().toStdString();
+        route = planner.findOptimalRoute(start, end);
+        std::cout << "\nRefreshed Route (" << start << " to " << end << "):\n";
+        if (!route.empty()) {
+            for (const auto& wp : route) {
+                std::cout << wp << " -> ";
+            }
+            std::cout << "END\n";
+        } else {
+            std::cout << "No route found\n";
+        }
+        map->update();
+    });
+    weatherTimer->start(900000); // 15 minutes
+
+    QObject::connect(startCombo, &QComboBox::currentTextChanged, [&](const QString& text) {
+        std::string start = text.toStdString();
+        std::string end = endCombo->currentText().toStdString();
+        route = planner.findOptimalRoute(start, end);
+        std::cout << "\nUpdated Route (" << start << " to " << end << "):\n";
+        if (!route.empty()) {
+            for (const auto& wp : route) {
+                std::cout << wp << " -> ";
+            }
+            std::cout << "END\n";
+        } else {
+            std::cout << "No route found\n";
+        }
+        map->update();
+    });
+
+    QObject::connect(endCombo, &QComboBox::currentTextChanged, [&](const QString& text) {
+        std::string start = startCombo->currentText().toStdString();
+        std::string end = text.toStdString();
+        route = planner.findOptimalRoute(start, end);
+        std::cout << "\nUpdated Route (" << start << " to " << end << "):\n";
+        if (!route.empty()) {
+            for (const auto& wp : route) {
+                std::cout << wp << " -> ";
+            }
+            std::cout << "END\n";
+        } else {
+            std::cout << "No route found\n";
+        }
+        map->update();
+    });
+
     window.resize(800, 600);
     window.show();
 
