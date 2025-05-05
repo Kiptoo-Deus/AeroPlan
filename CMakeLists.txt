@@ -1,19 +1,10 @@
 cmake_minimum_required(VERSION 3.10)
-project(FlightPlanner LANGUAGES CXX)
-
+project(flight-planner)
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
-set(CMAKE_AUTOUIC ON)
-
-find_package(Qt6 COMPONENTS Widgets REQUIRED)
+find_package(Qt6 COMPONENTS Widgets WebEngineWidgets REQUIRED)
 find_package(CURL REQUIRED)
-
-include_directories(${CMAKE_SOURCE_DIR}/include ${CURL_INCLUDE_DIRS})
-
-set(SOURCES src/main.cpp)
-set(RESOURCES resources/resources.qrc)
-
-add_executable(flight-planner ${SOURCES} ${RESOURCES})
-target_link_libraries(flight-planner PRIVATE Qt6::Widgets ${CURL_LIBRARIES})
+include_directories(${CURL_INCLUDE_DIRS} include)
+add_executable(flight-planner src/main.cpp resources/resources.qrc)
+target_link_libraries(flight-planner Qt6::Widgets Qt6::WebEngineWidgets ${CURL_LIBRARIES})

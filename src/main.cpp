@@ -1,13 +1,21 @@
 #include <QApplication>
 #include <QMainWindow>
 #include <QWidget>
-#include <QPainter>
-#include <QMouseEvent>
-#include <QResource>
+#include <QWebEngineView>
 #include <QDockWidget>
 #include <QComboBox>
 #include <QVBoxLayout>
+#include <QTextEdit>
+#include <QListWidget>
 #include <QTimer>
+#include <QStyleFactory>
+#include <QToolBar>
+#include <QPushButton>
+#include <QFileDialog>
+#include <QLabel>
+#include <QXmlStreamWriter>
+#include <QFile>
+#include <QMessageBox>
 #include <iostream>
 #include <vector>
 #include <string>
@@ -39,102 +47,187 @@ struct Edge {
 struct Weather {
     double wind_speed;
     double wind_dir;
-    Weather() : wind_speed(0.0), wind_dir(0.0) {}
-    Weather(double speed, double dir) : wind_speed(speed), wind_dir(dir) {}
+    std::string metar;
+    Weather() : wind_speed(0.0), wind_dir(0.0), metar("") {}
+    Weather(double speed, double dir, std::string m) : wind_speed(speed), wind_dir(dir), metar(m) {}
 };
 
 class MapWidget : public QWidget {
 private:
+    QWebEngineView* webView;
     std::unordered_map<std::string, Waypoint>& waypoints;
     std::vector<std::string>& route;
-    QImage map_image;
-    double zoom;
-    double offset_x, offset_y;
-    QPointF last_mouse_pos;
-
-protected:
-    void paintEvent(QPaintEvent*) override {
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing);
-
-        double map_width = map_image.width() * zoom;
-        double map_height = map_image.height() * zoom;
-        painter.drawImage(QRectF(offset_x, offset_y, map_width, map_height), map_image);
-
-        auto toPixel = [&](double lat, double lon) -> QPointF {
-            double x = (lon + 180.0) / 360.0 * map_image.width();
-            double y = (90.0 - lat) / 180.0 * map_image.height();
-            return QPointF(x * zoom + offset_x, y * zoom + offset_y);
-        };
-
-        for (const auto& [id, wp] : waypoints) {
-            QPointF pixel = toPixel(wp.lat, wp.lon);
-            painter.setPen(Qt::black);
-            painter.setBrush(wp.type == "airport" ? Qt::blue : Qt::red);
-            painter.drawEllipse(pixel, 5, 5);
-            if (zoom > 2.0) { // Show labels only when zoomed in
-                painter.drawText(pixel + QPointF(8, 0), QString::fromStdString(id));
-            }
-        }
-
-        if (!route.empty()) {
-            painter.setPen(QPen(Qt::green, 2));
-            for (size_t i = 1; i < route.size(); ++i) {
-                const Waypoint& wp1 = waypoints.at(route[i-1]);
-                const Waypoint& wp2 = waypoints.at(route[i]);
-                QPointF p1 = toPixel(wp1.lat, wp1.lon);
-                QPointF p2 = toPixel(wp2.lat, wp2.lon);
-                painter.drawLine(p1, p2);
-            }
-        }
-    }
-
-    void wheelEvent(QWheelEvent* event) override {
-        double old_zoom = zoom;
-        zoom *= event->angleDelta().y() > 0 ? 1.1 : 0.9;
-        zoom = std::max(0.5, std::min(zoom, 10.0));
-        double mouse_x = event->position().x();
-        double mouse_y = event->position().y();
-        offset_x += mouse_x * (old_zoom - zoom);
-        offset_y += mouse_y * (old_zoom - zoom);
-        update();
-    }
-
-    void mousePressEvent(QMouseEvent* event) override {
-        if (event->button() == Qt::LeftButton) {
-            last_mouse_pos = event->pos();
-            double x = (event->pos().x() - offset_x) / zoom;
-            double y = (event->pos().y() - offset_y) / zoom;
-            double lon = (x / map_image.width() * 360.0) - 180.0;
-            double lat = 90.0 - (y / map_image.height() * 180.0);
-            for (const auto& [id, wp] : waypoints) {
-                double dist = std::sqrt(std::pow(wp.lat - lat, 2) + std::pow(wp.lon - lon, 2));
-                if (dist < 1.0) {
-                    std::cout << "Clicked waypoint: " << id << "\n";
-                    break;
-                }
-            }
-        }
-    }
-
-    void mouseMoveEvent(QMouseEvent* event) override {
-        if (event->buttons() & Qt::LeftButton) {
-            offset_x += event->pos().x() - last_mouse_pos.x();
-            offset_y += event->pos().y() - last_mouse_pos.y();
-            last_mouse_pos = event->pos();
-            update();
-        }
-    }
+    QTextEdit* infoDisplay;
 
 public:
     MapWidget(std::unordered_map<std::string, Waypoint>& wp, std::vector<std::string>& r, QWidget* parent = nullptr)
-        : QWidget(parent), waypoints(wp), route(r), zoom(1.0), offset_x(0), offset_y(0) {
-        setMouseTracking(true);
-        map_image.load(":/world_map.jpg");
-        if (map_image.isNull()) {
-            std::cerr << "Failed to load world_map.jpg\n";
-        }
+        : QWidget(parent), waypoints(wp), route(r) {
+        QVBoxLayout* layout = new QVBoxLayout(this);
+        webView = new QWebEngineView(this);
+        infoDisplay = new QTextEdit(this);
+        infoDisplay->setReadOnly(true);
+        infoDisplay->setFixedHeight(100);
+        layout->addWidget(webView);
+        layout->addWidget(infoDisplay);
+
+        QString html = R"(
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset='utf-8' />
+                <title>Flight Planner Map</title>
+                <meta name='viewport' content='initial-scale=1,maximum-scale=1,user-scalable=no' />
+                <script src='https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js'></script>
+                <link href='https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css' rel='stylesheet' />
+                <style>
+                    body { margin: 0; padding: 0; }
+                    #map { position: absolute; top: 0; bottom: 100px; width: 100%; }
+                    #info { position: absolute; bottom: 0; width: 100%; height: 100px; background: #333; color: #fff; padding: 5px; }
+                </style>
+            </head>
+            <body>
+            <div id='map'></div>
+            <div id='info'>Click a waypoint to see details</div>
+            <script>
+                const map = new maplibregl.Map({
+                    container: 'map',
+                    style: 'https://api.maptiler.com/maps/basic/style.json?key=tZjDLrbVj0oBGiaBHZJC',
+                    center: [0, 0],
+                    zoom: 1
+                });
+
+                map.on('load', () => {
+                    console.log('Map loaded');
+                    map.addSource('waypoints', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+                    map.addSource('route', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+                    map.addLayer({
+                        id: 'waypoints',
+                        type: 'circle',
+                        source: 'waypoints',
+                        paint: {
+                            'circle-radius': 5,
+                            'circle-color': ['match', ['get', 'type'], 'airport', '#0000FF', 'VOR', '#FF0000', '#000000']
+                        }
+                    });
+                    map.addLayer({
+                        id: 'route',
+                        type: 'line',
+                        source: 'route',
+                        layout: { 'line-join': 'round', 'line-cap': 'round' },
+                        paint: { 'line-color': '#00FF00', 'line-width': 2 }
+                    });
+                    map.addLayer({
+                        id: 'waypoint-labels',
+                        type: 'symbol',
+                        source: 'waypoints',
+                        layout: {
+                            'text-field': ['get', 'id'],
+                            'text-offset': [1, 0],
+                            'text-anchor': 'left',
+                            'text-size': 12
+                        },
+                        paint: {
+                            'text-color': '#FFFFFF',
+                            'text-halo-color': '#000000',
+                            'text-halo-width': 1
+                        }
+                    });
+
+                    if (window.initialWaypoints && window.initialRoute) {
+                        updateWaypoints(window.initialWaypoints);
+                        updateRoute(window.initialRoute, window.initialWaypoints);
+                    }
+                });
+
+                function updateWaypoints(waypoints) {
+                    if (!map.getSource('waypoints')) {
+                        console.error('updateWaypoints: Waypoints source not ready');
+                        return;
+                    }
+                    console.log('Updating waypoints:', waypoints.length);
+                    const features = waypoints.map(wp => ({
+                        type: 'Feature',
+                        properties: { id: wp.id, type: wp.type },
+                        geometry: { type: 'Point', coordinates: [wp.lon, wp.lat] }
+                    }));
+                    map.getSource('waypoints').setData({ type: 'FeatureCollection', features });
+                }
+
+                function updateRoute(route, waypoints) {
+                    if (!map.getSource('route')) {
+                        console.error('updateRoute: Route source not ready');
+                        return;
+                    }
+                    console.log('Updating route:', route);
+                    const coords = route.map(id => {
+                        const wp = waypoints.find(w => w.id === id);
+                        return wp ? [wp.lon, wp.lat] : [0, 0];
+                    });
+                    map.getSource('route').setData({
+                        type: 'FeatureCollection',
+                        features: [{
+                            type: 'Feature',
+                            geometry: { type: 'LineString', coordinates: coords }
+                        }]
+                    });
+                }
+
+                map.on('click', 'waypoints', (e) => {
+                    const id = e.features[0].properties.id;
+                    console.log('Waypoint clicked:', id);
+                    document.getElementById('info').innerText = 'Clicked waypoint: ' + id;
+                });
+            </script>
+            </body>
+            </html>
+        )";
+        webView->setHtml(html);
+
+        QTimer::singleShot(2000, this, &MapWidget::updateMap);
         resize(800, 600);
+    }
+
+    void updateMap() {
+        QString jsWaypoints = "[";
+        for (const auto& [id, wp] : waypoints) {
+            jsWaypoints += QString("{'id': '%1', 'lat': %2, 'lon': %3, 'type': '%4'},")
+                .arg(QString::fromStdString(id).replace("'", "\\'"))
+                .arg(wp.lat)
+                .arg(wp.lon)
+                .arg(QString::fromStdString(wp.type));
+        }
+        jsWaypoints.chop(1);
+        jsWaypoints += "]";
+
+        QStringList routeList;
+        for (const auto& id : route) {
+            routeList.append(QString("'%1'").arg(QString::fromStdString(id).replace("'", "\\'")));
+        }
+        QString jsRoute = "[" + routeList.join(",") + "]";
+
+        QString jsCode = QString(
+            "window.initialWaypoints = %1;"
+            "window.initialRoute = %2;"
+            "if (map && map.loaded()) {"
+            "  console.log('Map ready, updating waypoints and route');"
+            "  updateWaypoints(window.initialWaypoints);"
+            "  updateRoute(window.initialRoute, window.initialWaypoints);"
+            "} else {"
+            "  console.log('Map not loaded yet, waypoints and route stored');"
+            "}"
+        ).arg(jsWaypoints, jsRoute);
+
+        webView->page()->runJavaScript(jsCode, [](const QVariant& result) {
+            if (!result.isValid()) {
+                std::cerr << "Failed to execute initial map update\n";
+            } else {
+                std::cout << "Initial map update executed successfully\n";
+            }
+        });
+    }
+
+    void setInfo(const QString& text) {
+        infoDisplay->setText(text);
     }
 };
 
@@ -167,30 +260,33 @@ private:
         CURL* curl = curl_easy_init();
         std::string response;
         if (curl) {
-            std::string url = "http://api.openweathermap.org/data/2.5/weather?lat=" + std::to_string(lat) +
-                              "&lon=" + std::to_string(lon) + "&appid=83e163f68a192a2705bcfd9f6e1dfb93&units=metric";
+            std::string url = "https://aviationweather.gov/api/data/metar?ids=" + waypoints.begin()->second.id +
+                              "&format=json";
             curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
             curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
             curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
             CURLcode res = curl_easy_perform(curl);
             curl_easy_cleanup(curl);
 
-            if (res == CURLE_OK) {
+            if (res == CURLE_OK && !response.empty()) {
                 try {
                     json j = json::parse(response);
-                    double speed = j["wind"]["speed"].get<double>() * 1.94384;
-                    double dir = j["wind"]["deg"].get<double>();
-                    Weather w(speed, dir);
-                    weather_cache.emplace(cache_key, w);
-                    return w;
-                } catch (...) {
-                    std::cerr << "JSON parse error for lat=" << lat << ", lon=" << lon << "\n";
+                    if (j.is_array() && !j.empty() && j[0].contains("wspd") && j[0].contains("wdir") && j[0].contains("rawOb")) {
+                        double speed = j[0]["wspd"].get<double>() * 1.94384;
+                        double dir = j[0]["wdir"].get<double>();
+                        std::string metar = j[0]["rawOb"].get<std::string>();
+                        Weather w(speed, dir, metar);
+                        weather_cache.emplace(cache_key, w);
+                        return w;
+                    }
+                } catch (const std::exception& e) {
+                    std::cerr << "JSON parse error for lat=" << lat << ", lon=" << lon << ": " << e.what() << "\n";
                 }
             } else {
-                std::cerr << "CURL error: " << curl_easy_strerror(res) << "\n";
+                std::cerr << "CURL error for lat=" << lat << ", lon=" << lon << ": " << curl_easy_strerror(res) << "\n";
             }
         }
-        Weather w(0.0, 0.0);
+        Weather w(0.0, 0.0, "No METAR available");
         weather_cache.emplace(cache_key, w);
         return w;
     }
@@ -198,8 +294,9 @@ private:
     double calculateFuelCost(const Waypoint& from, const Waypoint& to, double distance) {
         Weather w = fetchWeather(from.lat, from.lon);
         double bearing = std::atan2(
-            std::sin(to.lon - from.lon) * std::cos(to.lat),
-            std::cos(from.lat) * std::sin(to.lat) - std::sin(from.lat) * std::cos(to.lat) * std::cos(to.lon - from.lon)
+            std::sin(to.lon - from.lon) * std::cos(to.lat * M_PI / 180.0),
+            std::cos(from.lat * M_PI / 180.0) * std::sin(to.lat * M_PI / 180.0) -
+            std::sin(from.lat * M_PI / 180.0) * std::cos(to.lat * M_PI / 180.0) * std::cos(to.lon - from.lon)
         ) * 180.0 / M_PI;
         double relative_angle = std::fmod(w.wind_dir - bearing + 360.0, 360.0);
         double effective_speed = 450.0 + w.wind_speed * std::cos(relative_angle * M_PI / 180.0);
@@ -253,14 +350,126 @@ private:
                 }
             }
         }
+        for (const auto& [id1, wp1] : waypoints) {
+            if (wp1.type == "VOR") {
+                for (const auto& [id2, wp2] : waypoints) {
+                    if (id2 != id1 && wp2.type == "VOR") {
+                        double dist = greatCircleDistance(wp1, wp2);
+                        if (dist <= 1000.0) {
+                            graph[id1].emplace_back(id2, dist);
+                        }
+                    }
+                }
+            }
+        }
     }
 
 public:
     FlightPlanner(const std::string& root) : project_root(root) {}
 
+    bool exportToPln(const std::vector<std::string>& route, const QString& filename) {
+        QFile file(filename);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            std::cerr << "Failed to open " << filename.toStdString() << " for writing\n";
+            return false;
+        }
+
+        QXmlStreamWriter xml(&file);
+        xml.setAutoFormatting(true);
+        xml.writeStartDocument();
+        xml.writeStartElement("SimBase.Document");
+        xml.writeAttribute("Type", "FlightPlan");
+        xml.writeAttribute("version", "1,0");
+        xml.writeTextElement("Title", QString::fromStdString(route.front() + " to " + route.back()));
+        xml.writeTextElement("Descr", "Generated by Flight Planner");
+        xml.writeStartElement("FlightPlan.FlightPlan");
+
+        for (const auto& id : route) {
+            if (!this->waypoints.count(id)) continue;
+            const auto& wp = this->waypoints.at(id);
+            xml.writeStartElement("WorldPosition");
+            xml.writeCharacters(QString("%1,%2").arg(wp.lat, 0, 'f', 6).arg(wp.lon, 0, 'f', 6));
+            xml.writeEndElement();
+            xml.writeStartElement("ATCWaypoint");
+            xml.writeAttribute("id", QString::fromStdString(id).left(10));
+            xml.writeTextElement("ATCWaypointType", wp.type == "airport" ? "Airport" : "VOR");
+            xml.writeTextElement("WorldPosition", QString("%1,%2,0").arg(wp.lat, 0, 'f', 6).arg(wp.lon, 0, 'f', 6));
+            xml.writeEndElement();
+        }
+
+        xml.writeEndElement();
+        xml.writeEndElement();
+        xml.writeEndDocument();
+        file.close();
+        std::cout << "Exported .pln to " << filename.toStdString() << "\n";
+        return true;
+    }
+
+    bool exportToFms(const std::vector<std::string>& route, const QString& filename) {
+        QFile file(filename);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            std::cerr << "Failed to open " << filename.toStdString() << " for writing\n";
+            return false;
+        }
+
+        QTextStream out(&file);
+        out << "I\n1100 Version\nCYCLE 2310\nADEP " << QString::fromStdString(route.front()) << "\n";
+        out << "ADES " << QString::fromStdString(route.back()) << "\n";
+        out << "NUMENR " << route.size() << "\n";
+
+        int index = 0;
+        for (const auto& id : route) {
+            if (!this->waypoints.count(id)) continue;
+            const auto& wp = this->waypoints.at(id);
+            QString wp_id = QString::fromStdString(id).replace(" ", "_");
+            out << "1 " << wp_id << " 0.000000 " << QString::number(wp.lat, 'f', 6)
+                << " " << QString::number(wp.lon, 'f', 6) << " 0\n";
+            index++;
+        }
+
+        file.close();
+        std::cout << "Exported .fms to " << filename.toStdString() << "\n";
+        return true;
+    }
+
+    bool exportToLnmpln(const std::vector<std::string>& route, const QString& filename) {
+        QFile file(filename);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            std::cerr << "Failed to open " << filename.toStdString() << " for writing\n";
+            return false;
+        }
+
+        QXmlStreamWriter xml(&file);
+        xml.setAutoFormatting(true);
+        xml.writeStartDocument();
+        xml.writeStartElement("LittleNavmap");
+        xml.writeAttribute("SchemaVersion", "2.0");
+        xml.writeStartElement("Flightplan");
+        xml.writeTextElement("Header", QString::fromStdString(route.front() + " to " + route.back()));
+        xml.writeStartElement("Waypoints");
+
+        for (const auto& id : route) {
+            if (!this->waypoints.count(id)) continue;
+            const auto& wp = this->waypoints.at(id);
+            xml.writeStartElement("Waypoint");
+            xml.writeTextElement("Ident", QString::fromStdString(id));
+            xml.writeTextElement("Type", wp.type == "airport" ? "AIRPORT" : "VOR");
+            xml.writeTextElement("Pos", QString("%1 %2").arg(wp.lat, 0, 'f', 6).arg(wp.lon, 0, 'f', 6));
+            xml.writeEndElement();
+        }
+
+        xml.writeEndElement();
+        xml.writeEndElement();
+        xml.writeEndElement();
+        xml.writeEndDocument();
+        file.close();
+        std::cout << "Exported .lnmpln to " << filename.toStdString() << "\n";
+        return true;
+    }
+
     void loadData(const std::string& airports_file, const std::string& navaids_file) {
-        std::string airports_path = project_root + "/" + airports_file;
-        std::string navaids_path = project_root + "/" + navaids_file;
+        std::string airports_path = this->project_root + "/" + airports_file;
+        std::string navaids_path = this->project_root + "/" + navaids_file;
         loadAirports(airports_path);
         loadNavaids(navaids_path);
         buildGraph();
@@ -336,11 +545,54 @@ public:
         std::sort(ids.begin(), ids.end());
         return ids;
     }
+
+    std::string getMockChart(const std::string& airport_id) {
+        if (waypoints.count(airport_id)) {
+            return "SID " + airport_id + "-1: Depart runway, climb to 5000ft, proceed to nearest VOR.\n"
+                   "STAR " + airport_id + "-1: From VOR, descend to 3000ft, approach runway.";
+        }
+        return "No chart available for " + airport_id;
+    }
+
+    double calculateRouteDistance(const std::vector<std::string>& route) {
+        double total = 0.0;
+        for (size_t i = 0; i < route.size() - 1; ++i) {
+            if (waypoints.count(route[i]) && waypoints.count(route[i + 1])) {
+                total += greatCircleDistance(waypoints.at(route[i]), waypoints.at(route[i + 1]));
+            }
+        }
+        return total;
+    }
 };
 
 int main(int argc, char *argv[]) {
     curl_global_init(CURL_GLOBAL_ALL);
     QApplication app(argc, argv);
+    app.setStyle(QStyleFactory::create("Fusion"));
+    QPalette darkPalette;
+    darkPalette.setColor(QPalette::Window, QColor(53, 53, 53));
+    darkPalette.setColor(QPalette::WindowText, Qt::white);
+    darkPalette.setColor(QPalette::Base, QColor(25, 25, 25));
+    darkPalette.setColor(QPalette::AlternateBase, QColor(53, 53, 53));
+    darkPalette.setColor(QPalette::ToolTipBase, Qt::white);
+    darkPalette.setColor(QPalette::ToolTipText, Qt::white);
+    darkPalette.setColor(QPalette::Text, Qt::white);
+    darkPalette.setColor(QPalette::Button, QColor(53, 53, 53));
+    darkPalette.setColor(QPalette::ButtonText, Qt::white);
+    darkPalette.setColor(QPalette::BrightText, Qt::red);
+    darkPalette.setColor(QPalette::Link, QColor(42, 130, 218));
+    darkPalette.setColor(QPalette::Highlight, QColor(42, 130, 218));
+    darkPalette.setColor(QPalette::HighlightedText, Qt::black);
+    app.setPalette(darkPalette);
+    app.setStyleSheet(
+        "QToolTip { color: #ffffff; background-color: #2a82da; border: 1px solid white; }"
+        "QPushButton { background-color: #4a4a4a; color: white; padding: 5px; border-radius: 5px; font-family: 'Arial'; }"
+        "QPushButton:hover { background-color: #5a5a5a; }"
+        "QComboBox { background-color: #333; color: white; padding: 5px; border-radius: 3px; }"
+        "QDockWidget::title { background: #3a3a3a; color: white; padding: 5px; }"
+        "QTextEdit, QListWidget { background-color: #2a2a2a; color: white; border: 1px solid #555; }"
+        "QLabel { color: white; font-family: 'Arial'; }"
+    );
 
     std::string project_root = "/Users/joel/Documents/GitHub/flight-planner";
     FlightPlanner planner(project_root);
@@ -361,18 +613,48 @@ int main(int argc, char *argv[]) {
     QMainWindow window;
     window.setWindowTitle("Flight Planner");
 
+    QToolBar* toolbar = window.addToolBar("Tools");
+    toolbar->setMovable(false);
+    QPushButton* exportButton = new QPushButton("Export Route", &window);
+    toolbar->addWidget(exportButton);
+    QPushButton* refreshButton = new QPushButton("Refresh Weather", &window);
+    toolbar->addWidget(refreshButton);
+
     MapWidget* map = new MapWidget(planner.getWaypoints(), route, &window);
     window.setCentralWidget(map);
 
-    QDockWidget* dock = new QDockWidget("Route Planner", &window);
-    window.addDockWidget(Qt::LeftDockWidgetArea, dock);
-    QWidget* dockWidget = new QWidget(dock);
-    QVBoxLayout* layout = new QVBoxLayout(dockWidget);
-    QComboBox* startCombo = new QComboBox(dockWidget);
-    QComboBox* endCombo = new QComboBox(dockWidget);
-    layout->addWidget(startCombo);
-    layout->addWidget(endCombo);
-    dock->setWidget(dockWidget);
+    QDockWidget* routeDock = new QDockWidget("Route Planner", &window);
+    window.addDockWidget(Qt::LeftDockWidgetArea, routeDock);
+    QWidget* routeWidget = new QWidget(routeDock);
+    QVBoxLayout* routeLayout = new QVBoxLayout(routeWidget);
+    QComboBox* startCombo = new QComboBox(routeWidget);
+    QComboBox* endCombo = new QComboBox(routeWidget);
+    QLabel* routeSummary = new QLabel("Route: 0 waypoints, 0 nm", routeWidget);
+    routeLayout->addWidget(new QLabel("Departure", routeWidget));
+    routeLayout->addWidget(startCombo);
+    routeLayout->addWidget(new QLabel("Arrival", routeWidget));
+    routeLayout->addWidget(endCombo);
+    routeLayout->addWidget(routeSummary);
+    routeLayout->addStretch();
+    routeDock->setWidget(routeWidget);
+
+    QDockWidget* chartDock = new QDockWidget("Charts", &window);
+    QWidget* chartWidget = new QWidget(chartDock);
+    QVBoxLayout* chartLayout = new QVBoxLayout(chartWidget);
+    QListWidget* chartList = new QListWidget(chartWidget);
+    chartLayout->addWidget(chartList);
+    QTextEdit* chartDisplay = new QTextEdit(chartWidget);
+    chartDisplay->setReadOnly(true);
+    chartLayout->addWidget(chartDisplay);
+    chartDock->setWidget(chartWidget);
+
+    QDockWidget* toolsDock = new QDockWidget("Pilot Tools", &window);
+    QTextEdit* toolsDisplay = new QTextEdit(toolsDock);
+    toolsDisplay->setReadOnly(true);
+    toolsDock->setWidget(toolsDisplay);
+
+    window.tabifyDockWidget(chartDock, toolsDock);
+    window.addDockWidget(Qt::RightDockWidgetArea, chartDock);
 
     for (const auto& id : planner.getWaypointIds()) {
         startCombo->addItem(QString::fromStdString(id));
@@ -381,11 +663,17 @@ int main(int argc, char *argv[]) {
     startCombo->setCurrentText("EGLL");
     endCombo->setCurrentText("KJFK");
 
+    chartList->addItem("EGLL SID-1");
+    chartList->addItem("KJFK STAR-1");
+    chartDisplay->setText(QString::fromStdString(planner.getMockChart("EGLL")));
+    toolsDisplay->setText("METAR EGLL: " + QString::fromStdString(planner.getWeatherCache().begin()->second.metar) +
+                          "\nNOTAM: No active NOTAMs\nATIS: Runway 27R in use.");
+    routeSummary->setText(QString("Route: %1 waypoints, %2 nm")
+        .arg(route.size())
+        .arg(planner.calculateRouteDistance(route), 0, 'f', 1));
+
     QTimer* weatherTimer = new QTimer(&window);
-    QObject::connect(weatherTimer, &QTimer::timeout, [&]() {
-        planner.getWeatherCache().clear();
-        std::string start = startCombo->currentText().toStdString();
-        std::string end = endCombo->currentText().toStdString();
+    auto updateRoute = [&](const std::string& start, const std::string& end) {
         route = planner.findOptimalRoute(start, end);
         std::cout << "\nRefreshed Route (" << start << " to " << end << "):\n";
         if (!route.empty()) {
@@ -396,45 +684,89 @@ int main(int argc, char *argv[]) {
         } else {
             std::cout << "No route found\n";
         }
-        map->update();
+        map->updateMap();
+        routeSummary->setText(QString("Route: %1 waypoints, %2 nm")
+            .arg(route.size())
+            .arg(planner.calculateRouteDistance(route), 0, 'f', 1));
+        toolsDisplay->setText("METAR " + QString::fromStdString(start) + ": " +
+                              QString::fromStdString(planner.getWeatherCache().begin()->second.metar) +
+                              "\nNOTAM: No active NOTAMs\nATIS: Runway in use.");
+    };
+
+    QObject::connect(weatherTimer, &QTimer::timeout, [&]() {
+        planner.getWeatherCache().clear();
+        std::string start = startCombo->currentText().toStdString();
+        std::string end = endCombo->currentText().toStdString();
+        updateRoute(start, end);
     });
-    weatherTimer->start(900000); // 15 minutes
+    weatherTimer->start(900000);
+
+    QObject::connect(refreshButton, &QPushButton::clicked, [&]() {
+        planner.getWeatherCache().clear();
+        std::string start = startCombo->currentText().toStdString();
+        std::string end = endCombo->currentText().toStdString();
+        updateRoute(start, end);
+    });
 
     QObject::connect(startCombo, &QComboBox::currentTextChanged, [&](const QString& text) {
         std::string start = text.toStdString();
         std::string end = endCombo->currentText().toStdString();
-        route = planner.findOptimalRoute(start, end);
-        std::cout << "\nUpdated Route (" << start << " to " << end << "):\n";
-        if (!route.empty()) {
-            for (const auto& wp : route) {
-                std::cout << wp << " -> ";
-            }
-            std::cout << "END\n";
-        } else {
-            std::cout << "No route found\n";
-        }
-        map->update();
+        updateRoute(start, end);
+        chartList->clear();
+        chartList->addItem(QString::fromStdString(start + " SID-1"));
+        chartList->addItem(QString::fromStdString(end + " STAR-1"));
+        chartDisplay->setText(QString::fromStdString(planner.getMockChart(start)));
     });
 
     QObject::connect(endCombo, &QComboBox::currentTextChanged, [&](const QString& text) {
         std::string start = startCombo->currentText().toStdString();
         std::string end = text.toStdString();
-        route = planner.findOptimalRoute(start, end);
-        std::cout << "\nUpdated Route (" << start << " to " << end << "):\n";
-        if (!route.empty()) {
-            for (const auto& wp : route) {
-                std::cout << wp << " -> ";
-            }
-            std::cout << "END\n";
-        } else {
-            std::cout << "No route found\n";
-        }
-        map->update();
+        updateRoute(start, end);
+        chartList->clear();
+        chartList->addItem(QString::fromStdString(start + " SID-1"));
+        chartList->addItem(QString::fromStdString(end + " STAR-1"));
+        chartDisplay->setText(QString::fromStdString(planner.getMockChart(end)));
     });
 
-    window.resize(800, 600);
+    QObject::connect(chartList, &QListWidget::itemClicked, [&](QListWidgetItem* item) {
+        std::string id = item->text().split("-")[0].toStdString();
+        chartDisplay->setText(QString::fromStdString(planner.getMockChart(id)));
+    });
+
+    QObject::connect(exportButton, &QPushButton::clicked, [&]() {
+        QStringList formats;
+        formats << "MSFS/Prepar3D (*.pln)" << "X-Plane (*.fms)" << "Little Navmap (*.lnmpln)";
+        QString selectedFilter = formats[0];
+        QString filename = QFileDialog::getSaveFileName(
+            &window,
+            "Export Flight Plan",
+            QDir::homePath(),
+            formats.join(";;"),
+            &selectedFilter
+        );
+        if (filename.isEmpty()) return;
+
+        bool success = false;
+        if (selectedFilter.contains(".pln")) {
+            if (!filename.endsWith(".pln")) filename += ".pln";
+            success = planner.exportToPln(route, filename);
+        } else if (selectedFilter.contains(".fms")) {
+            if (!filename.endsWith(".fms")) filename += ".fms";
+            success = planner.exportToFms(route, filename);
+        } else if (selectedFilter.contains(".lnmpln")) {
+            if (!filename.endsWith(".lnmpln")) filename += ".lnmpln";
+            success = planner.exportToLnmpln(route, filename);
+        }
+
+        QMessageBox::information(&window, "Export",
+            success ? "Flight plan exported successfully" : "Failed to export flight plan");
+    });
+
+    window.resize(1000, 700);
     window.show();
 
     curl_global_cleanup();
     return app.exec();
 }
+
+#include "main.moc"
