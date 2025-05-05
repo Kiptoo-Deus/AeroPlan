@@ -1,148 +1,253 @@
-Flight Planner
-A C++/Qt-based flight planning application for Microsoft Flight Simulator (MSFS), X-Plane, and Prepar3D. It generates optimal routes using the A* algorithm, displays real-time maps via MapTiler, and exports flight plans in .pln, .fms, and .lnmpln formats. The modern GUI includes a toolbar, route summary, tabified chart/tools docks, and pilot tools (METAR, NOTAMs, ATIS).
+# ✈️ Flight Planner
 
-<img width="2213" alt="Screenshot 2025-05-05 at 8 29 12 PM" src="https://github.com/user-attachments/assets/4ee153db-c777-4fd8-85c4-832c13b2a8d5" />
+A C++/Qt-based flight planning application for Microsoft Flight Simulator (MSFS), X-Plane, and Prepar3D. It generates optimal routes using the A\* algorithm, displays real-time maps via MapTiler, and exports flight plans in `.pln`, `.fms`, and `.lnmpln` formats.
 
-
-Features
-
-Route Planning: A* algorithm optimizes routes using global airport/VOR data from OurAirports, factoring in wind data from NOAA.
-Map Display: Real-time MapTiler map with clickable waypoints (blue for airports, red for VORs), green route lines, and white labels.
-Export: Supports .pln (MSFS/Prepar3D), .fms (X-Plane), and .lnmpln (Little Navmap) formats.
-GUI: Dark-themed interface with toolbar (Export, Refresh Weather), route summary (waypoints, distance), and tabified docks for charts (mock SIDs/STARs) and pilot tools.
-Weather: Fetches METAR data, updates every 15 minutes or on demand.
-Cross-Platform: Runs on macOS and Windows.
-
-Prerequisites
-
-CMake: 3.10 or higher
-Qt 6: Widgets and WebEngineWidgets modules
-libcurl: For NOAA weather API
-C++17 Compiler: Clang (macOS) or MSVC (Windows)
-Dependencies:
-json.hpp (nlohmann/json v3.11.3)
-csv.hpp (csv-parser)
+<img width="2213" alt="Screenshot 2025-05-05 at 8 29 12 PM" src="https://github.com/user-attachments/assets/0d6d0178-dfa8-47fd-83b3-87d9e42d3e4e" />
 
 
-Data Files:
-airports.csv (OurAirports)
-navaids.csv (OurAirports)
+## 🌟 Features
 
+* **Route Planning**: A\* algorithm optimized with global airport and VOR data from OurAirports, considering wind data from NOAA.
+* **Map Display**: Real-time MapTiler map with clickable waypoints
 
-Internet: For MapTiler and NOAA APIs
+  * 🟦 Airports
+  * 🔴 VORs
+  * 🟩 Route lines
+  * ⚪ White labels
+* **Export Formats**:
 
-Setup and Installation
-macOS
+  * `.pln` (MSFS/Prepar3D)
+  * `.fms` (X-Plane)
+  * `.lnmpln` (Little Navmap)
+* **Modern GUI**:
 
-Install Homebrew:/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  * Dark theme
+  * Toolbar (Export, Refresh Weather)
+  * Route summary (waypoints, distance)
+  * Tabified docks (charts, pilot tools)
+* **Weather Tools**: Fetches METAR data every 15 minutes or on demand
+* **Cross-Platform**: macOS & Windows
 
+---
 
-Install Dependencies:brew install cmake qt libcurl
+## ⚙️ Prerequisites
 
+* **CMake**: ≥ 3.10
 
-Clone Repository:git clone https://github.com/yourusername/flight-planner.git
+* **Qt 6**: `Widgets`, `WebEngineWidgets`
+
+* **libcurl**: For NOAA weather API
+
+* **C++17 Compiler**: Clang (macOS) or MSVC (Windows)
+
+* **Dependencies**:
+
+  * [`json.hpp`](https://github.com/nlohmann/json) (v3.11.3)
+  * [`csv.hpp`](https://github.com/vincentlaucsb/csv-parser)
+
+* **Data Files**:
+
+  * `airports.csv` (OurAirports)
+  * `navaids.csv` (OurAirports)
+
+* **Internet Access**: Required for MapTiler & NOAA API
+
+---
+
+## 🖥️ Installation
+
+### macOS
+
+1. **Install Homebrew**
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+2. **Install Dependencies**
+
+```bash
+brew install cmake qt libcurl
+```
+
+3. **Clone Repository**
+
+```bash
+git clone https://github.com/yourusername/flight-planner.git
 cd flight-planner
+```
 
+4. **Download Headers**
 
-Download Dependencies:mkdir -p include
+```bash
+mkdir -p include
 curl -L https://github.com/nlohmann/json/releases/download/v3.11.3/json.hpp -o include/json.hpp
 curl -L https://github.com/vincentlaucsb/csv-parser/raw/master/single_include/csv.hpp -o include/csv.hpp
+```
 
+5. **Download Data Files**
 
-Download Data Files:mkdir -p data
+```bash
+mkdir -p data
 curl -L https://davidmegginson.github.io/ourairports-data/airports.csv -o data/airports.csv
 curl -L https://davidmegginson.github.io/ourairports-data/navaids.csv -o data/navaids.csv
+```
 
+6. **Create Resource File**
 
-Create Resource File:echo '<RCC><qresource prefix="/"><file>world_map.jpg</file></qresource></RCC>' > resources.qrc
+```bash
+echo '<RCC><qresource prefix="/"><file>world_map.jpg</file></qresource></RCC>' > resources.qrc
+```
 
+7. **Build & Run**
 
-Build:mkdir build && cd build
+```bash
+mkdir build && cd build
 cmake .. -DQt6_DIR=/opt/homebrew/lib/cmake/Qt6 -DCURL_DIR=/opt/homebrew/lib/cmake/CURL
 make
+./flight-planner
+```
 
+---
 
-Run:./flight-planner
+### Windows
 
+1. **Install Visual Studio**
 
+   * Download [Visual Studio 2022 Community](https://visualstudio.microsoft.com/)
+   * Include **"Desktop development with C++"** workload
 
-Windows
+2. **Install CMake**
 
-Install Visual Studio:
-Download Visual Studio Community 2022 from https://visualstudio.microsoft.com.
-Include "Desktop development with C++" workload.
+   * [Download](https://cmake.org/download/)
+   * Add to `PATH`
 
+3. **Install vcpkg**
 
-Install CMake:
-Download from https://cmake.org/download, add to PATH.
-
-
-Install vcpkg:git clone https://github.com/microsoft/vcpkg.git
+```powershell
+git clone https://github.com/microsoft/vcpkg.git
 cd vcpkg
 .\bootstrap-vcpkg.bat
+```
 
+4. **Install Dependencies**
 
-Install Dependencies via vcpkg:.\vcpkg install qt6-base qt6-webengine curl --triplet x64-windows
+```powershell
+.\vcpkg install qt6-base qt6-webengine curl --triplet x64-windows
+```
 
+5. **Clone Repository**
 
-Clone Repository:git clone https://github.com/yourusername/flight-planner.git
+```powershell
+git clone https://github.com/yourusername/flight-planner.git
 cd flight-planner
+```
 
+6. **Download Headers**
 
-Download Dependencies:mkdir include
+```powershell
+mkdir include
 curl -L https://github.com/nlohmann/json/releases/download/v3.11.3/json.hpp -o include\json.hpp
 curl -L https://github.com/vincentlaucsb/csv-parser/raw/master/single_include/csv.hpp -o include\csv.hpp
+```
 
+7. **Download Data Files**
 
-Download Data Files:mkdir data
+```powershell
+mkdir data
 curl -L https://davidmegginson.github.io/ourairports-data/airports.csv -o data\airports.csv
 curl -L https://davidmegginson.github.io/ourairports-data/navaids.csv -o data\navaids.csv
+```
 
+8. **Create Resource File**
 
-Create Resource File:echo ^<RCC^>^<qresource prefix="/"^>^<file^>world_map.jpg^</file^>^</qresource^>^</RCC^> > resources.qrc
+```powershell
+echo ^<RCC^>^<qresource prefix="/"^>^<file^>world_map.jpg^</file^>^</qresource^>^</RCC^> > resources.qrc
+```
 
+9. **Build & Run**
 
-Build:mkdir build
+```powershell
+mkdir build
 cd build
 cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE=C:\path\to\vcpkg\scripts\buildsystems\vcpkg.cmake
 cmake --build . --config Release
+.\Release\flight-planner.exe
+```
 
-Replace C:\path\to\vcpkg with your vcpkg directory.
-Run:.\Release\flight-planner.exe
+> 🔁 Replace `C:\path\to\vcpkg` with your actual vcpkg path.
+
+---
+
+## 🚀 Usage
+
+* **Route Planning**: Select departure/arrival airports (e.g., `EGLL` to `KJFK`); A\* algorithm generates route.
+* **Map Viewer**:
+
+  * 🟦 Airports, 🔴 VORs
+  * 🟩 Green route line
+  * Zoomable, clickable interface
+* **Export**:
+
+  * `.pln`: Copy to `C:\ProgramData\Garmin\Trainers\GTN\FPLN` or load in MSFS/Prepar3D
+  * `.fms`: Copy to `Output/FMS plans` for X-Plane
+  * `.lnmpln`: Import into Little Navmap
+* **Charts & Tools**:
+
+  * View mock SIDs/STARs
+  * METAR, NOTAMs, and ATIS
+  * "Refresh Weather" for updates
+
+---
+
+## 🛠️ Troubleshooting
+
+* **Build Errors**:
+
+  * Confirm Qt6, libcurl, and CMake are installed
+  * Check file presence: `include/json.hpp`, `include/csv.hpp`, `data/*.csv`
+
+* **Map Not Rendering**:
+
+  * Verify internet access
+  * Test MapTiler API:
+
+    ```bash
+    curl -I https://api.maptiler.com/maps/basic/style.json?key=YOUR_API_KEY
+    ```
+
+* **Export Issues**:
+
+  * Check file permissions:
+
+    ```bash
+    ls -l ~/route.pln
+    ```
+
+* **JavaScript Errors in WebView**:
+  Add this before `app.exec()`:
+
+  ```cpp
+  qputenv("QT_LOGGING_RULES", "qt5.webenginecontext=true");
+  ```
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome!
+
+1. Fork the repo
+2. Create a feature branch
+3. Submit a pull request
+
+---
 
 
+## 🙏 Acknowledgments
 
-Usage
+* [OurAirports](https://ourairports.com) – Airport & VOR data
+* [MapTiler](https://maptiler.com) – Map rendering
+* [NOAA](https://aviationweather.gov/metar) – METAR data
 
-Route Planning: Select departure and arrival airports (e.g., EGLL to KJFK) from dropdowns. The A* algorithm generates an optimal route.
-Map: View waypoints (blue for airports, red for VORs) and green route lines on a zoomable MapTiler map. Click waypoints to see details.
-Export: Click "Export Route" to save as .pln (MSFS/Prepar3D), .fms (X-Plane), or .lnmpln (Little Navmap).
-MSFS/Prepar3D: Copy .pln to C:\ProgramData\Garmin\Trainers\GTN\FPLN (Windows) or load via "Open Flight Plan".
-X-Plane: Copy .fms to Output/FMS plans and load via FMS menu.
-Little Navmap: Import .lnmpln and re-export if needed.
-
-
-Charts: View mock SIDs/STARs in the Charts dock.
-Pilot Tools: Check METAR, NOTAMs, and ATIS in the Tools dock.
-Weather: Click "Refresh Weather" or wait 15 minutes for updated METAR data.
-
-Troubleshooting
-
-Build Errors: Ensure Qt6, libcurl, and CMake are installed. Verify include/json.hpp and data/airports.csv.
-Map Not Rendering: Check internet and MapTiler API key:curl -I https://api.maptiler.com/maps/basic/style.json?key=tZjDLrbVj0oBGiaBHZJC
-
-
-Export Fails: Verify file permissions:dir ~/route.pln
-
-
-JavaScript Errors: Enable debug logs by adding to main() before app.exec():qputenv("QT_LOGGING_RULES", "qt5.webenginecontext=true");
-
-Rebuild and check console.
-
-
-Acknowledgments
-
-OurAirports for airport/VOR data
-MapTiler for map rendering
-NOAA for METAR data
-
+---
