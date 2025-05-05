@@ -8,8 +8,9 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
 find_package(Qt6 COMPONENTS Widgets REQUIRED)
+find_package(CURL REQUIRED)
 
-include_directories(${CMAKE_SOURCE_DIR}/include)
+include_directories(${CMAKE_SOURCE_DIR}/include ${CURL_INCLUDE_DIRS})
 
 add_executable(flight-planner src/main.cpp)
-target_link_libraries(flight-planner PRIVATE Qt6::Widgets)
+target_link_libraries(flight-planner PRIVATE Qt6::Widgets ${CURL_LIBRARIES})
